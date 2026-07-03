@@ -1,0 +1,38 @@
+name: Send Due Notifications
+
+on:
+  # Runs every 25 minutes — see dispatcher/send-due-notifications.ts for the math
+  # on why 25 min is the right interval for a private repo free tier.
+  schedule:
+    - cron: '*/25 * * * *'
+
+  # Allow a manual trigger from the GitHub Actions UI for testing
+  workflow_dispatch:
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dispatcher dependencies
+        run: pnpm --filter @claude-reset/dispatcher install --frozen-lockfile
+
+      - name: Run dispatcher
+        run: pnpm --filter @claude-reset/dispatcher start
+        env:
+          # Store the full service account JSON as a GitHub Secret:
+          #   Repo → Settings → Secrets and variables → Actions → New repository secret
+          #   Name: FIREBASE_SERVICE_ACCOUNT
+          #   Value: contents of your serviceAccountKey.json (paste the whole JSON)
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

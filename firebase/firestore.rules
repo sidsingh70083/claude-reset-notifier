@@ -1,0 +1,39 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Per-user data ──────────────────────────────────────────────────────
+    // Each user can only read and write their own documents.
+    // No user can see another user's session data or push tokens.
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == uid;
+
+      match /session/{document=**} {
+        allow read, write: if request.auth != null
+                           && request.auth.uid == uid;
+      }
+
+      match /pushSubscriptions/{tokenId} {
+        allow read, write: if request.auth != null
+                           && request.auth.uid == uid;
+      }
+    }
+
+    // ── Global config ──────────────────────────────────────────────────────
+    // resetWindowMs lives here. Authenticated users can read it;
+    // only the Admin SDK (dispatcher / manual console edits) can write it.
+
+    match /config/{document=**} {
+      allow read:  if request.auth != null;
+      allow write: if false; // Admin SDK only
+    }
+
+    // ── Deny everything else ───────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

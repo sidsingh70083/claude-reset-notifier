@@ -1,0 +1,16 @@
+{
+  "name": "claude-reset-notifier",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build:extension": "pnpm --filter @claude-reset/extension build",
+    "build:pwa": "pnpm --filter @claude-reset/companion-pwa build",
+    "dev:extension": "pnpm --filter @claude-reset/extension dev",
+    "dev:pwa": "pnpm --filter @claude-reset/companion-pwa dev",
+    "typecheck": "pnpm -r typecheck",
+    "build:all": "pnpm build:extension && pnpm build:pwa"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
