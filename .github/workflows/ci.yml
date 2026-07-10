@@ -13,6 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm must be set up BEFORE setup-node so the caching works correctly.
+      # setup-node with cache:'pnpm' looks for pnpm-lock.yaml in the repo root —
+      # that file must be committed (see SETUP-GUIDE.md if CI fails with
+      # "Dependencies lock file is not found").
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -25,16 +29,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check (shared)
+      # ── Type checks ──────────────────────────────────────────────────────────
+
+      - name: Typecheck — shared
         run: pnpm --filter @claude-reset/shared typecheck
 
-      - name: Type check (extension)
+      - name: Typecheck — extension
         run: pnpm --filter @claude-reset/extension typecheck
 
-      - name: Type check (PWA)
+      - name: Typecheck — companion PWA
         run: pnpm --filter @claude-reset/companion-pwa typecheck
 
-      - name: Build extension
+      # ── Builds ───────────────────────────────────────────────────────────────
+      # Secrets must be added to the repo before these steps will succeed:
+      #   Repo → Settings → Secrets and variables → Actions → New repository secret
+      #   Required: VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN,
+      #             VITE_FIREBASE_PROJECT_ID, VITE_FIREBASE_STORAGE_BUCKET,
+      #             VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_FIREBASE_APP_ID,
+      #             VITE_GOOGLE_CLIENT_ID
+
+      - name: Build — extension
         run: pnpm --filter @claude-reset/extension build
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
@@ -45,7 +59,7 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
 
-      - name: Build PWA
+      - name: Build — companion PWA
         run: pnpm --filter @claude-reset/companion-pwa build
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}

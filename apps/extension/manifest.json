@@ -9,7 +9,8 @@
     "alarms",
     "notifications",
     "identity",
-    "webRequest"
+    "webRequest",
+    "scripting"
   ],
 
   "host_permissions": [
@@ -22,6 +23,12 @@
   },
 
   "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["src/injected/usage-bridge.ts"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
     {
       "matches": ["https://claude.ai/*"],
       "js": ["src/content/detector.ts"],

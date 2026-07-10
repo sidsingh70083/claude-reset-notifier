@@ -31,14 +31,24 @@ export default function Countdown({ session }: CountdownProps) {
 
   const clampedRemaining = Math.max(0, remaining);
 
+  // Precision is asymmetric depending on where the data came from:
+  //   usage-endpoint  → resetTime is authoritative (from Anthropic), sessionStart is back-computed
+  //   local-estimate  → sessionStart is the real detected timestamp, resetTime is a forward guess
+  const startIsExact = session.source === 'local-estimate';
+  const resetIsExact = session.source === 'usage-endpoint';
+
   return (
     <div className="countdown-root">
       <div className="time-row">
-        <span className="time-label">Session started</span>
+        <span className="time-label">
+          Session started{!startIsExact && <span className="time-approx"> (est.)</span>}
+        </span>
         <span className="time-value">{formatTime(session.sessionStart)}</span>
       </div>
       <div className="time-row">
-        <span className="time-label">Claude ready</span>
+        <span className="time-label">
+          Claude ready{!resetIsExact && <span className="time-approx"> (est.)</span>}
+        </span>
         <span className="time-value accent">{formatTime(session.resetTime)}</span>
       </div>
 

@@ -14,6 +14,8 @@ export const STORAGE_KEYS = {
   session: 'session',
   user: 'user',
   resetWindowMs: 'resetWindowMs',
+  /** True when recovery scan found messages but could not extract a start timestamp. */
+  midSessionDetected: 'midSessionDetected',
 } as const;
 
 /** Named alarm — survives service worker termination */

@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import type { Session, StoredUser } from '@claude-reset/shared';
-import { getStoredSession, getStoredUser } from '../lib/storage';
+import { getStoredSession, getStoredUser, getMidSessionDetected } from '../lib/storage';
 import SignIn from './SignIn';
 import Countdown from './Countdown';
 
-type PopupState = 'loading' | 'signed-out' | 'idle' | 'active' | 'ready';
+type PopupState = 'loading' | 'signed-out' | 'idle' | 'mid-session' | 'active' | 'ready';
 
 export default function Popup() {
   const [user, setUser] = useState<StoredUser | null>(null);
@@ -12,9 +12,10 @@ export default function Popup() {
   const [state, setState] = useState<PopupState>('loading');
 
   const loadState = useCallback(async () => {
-    const [storedUser, storedSession] = await Promise.all([
+    const [storedUser, storedSession, midSession] = await Promise.all([
       getStoredUser(),
       getStoredSession(),
+      getMidSessionDetected(),
     ]);
 
     setUser(storedUser);
@@ -23,7 +24,8 @@ export default function Popup() {
     if (!storedUser) {
       setState('signed-out');
     } else if (!storedSession) {
-      setState('idle');
+      // No tracked session — but mid-session flag means Claude was already running
+      setState(midSession ? 'mid-session' : 'idle');
     } else if (storedSession.notified || Date.now() >= storedSession.resetTime) {
       setState('ready');
     } else {
@@ -32,8 +34,10 @@ export default function Popup() {
   }, []);
 
   useEffect(() => {
+    // Clear the notification badge whenever the popup is opened
+    chrome.action.setBadgeText({ text: '' });
+
     void loadState();
-    // Re-check every 30 s in case background SW updated storage while popup was open
     const interval = setInterval(() => void loadState(), 30_000);
     return () => clearInterval(interval);
   }, [loadState]);
@@ -80,6 +84,17 @@ export default function Popup() {
             >
               Open Claude
             </a>
+          </div>
+        )}
+
+        {state === 'mid-session' && (
+          <div className="state-card">
+            <div className="state-icon">🔄</div>
+            <p className="state-title">Session in progress</p>
+            <p className="state-sub">
+              Claude was already running when you installed.<br />
+              Exact reset time unavailable — we&apos;ll track from your next fresh session.
+            </p>
           </div>
         )}
 

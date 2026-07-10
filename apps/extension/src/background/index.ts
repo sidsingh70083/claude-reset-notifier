@@ -1,85 +1,135 @@
 /**
  * Background Service Worker
  *
- * Responsibilities in M1–M3:
- *   1. Secondary detection: webRequest observer (corroborates content script DOM signal)
- *   2. Receive SESSION_PROMPT_DETECTED messages from the content script
- *   3. Delegate session logic to session.ts (idempotency, resetTime, alarm)
- *   4. Fire the desktop notification when chrome.alarms fires at resetTime
- *   5. Handle sign-out cleanup
+ * Message priority (highest trust first):
+ *   1. USAGE_UPDATE          — authoritative, from GET /usage (detector.ts)
+ *   2. SESSION_PROMPT_DETECTED — local estimate fallback (DOM/network signal)
+ *   3. SESSION_RECOVERY      — local estimate fallback (mid-session DOM scan)
  *
- * What it does NOT do in M1–M3:
- *   - Touch Firestore (M5)
- *   - Send phone push notifications (M8)
+ * See session.ts for the full trust/precedence logic between these.
  */
 
 import { ALARM_NAME, NOTIFICATION_ID } from '@claude-reset/shared';
 import type { ContentMessage } from '@claude-reset/shared';
-import { handleSessionStart, markSessionNotified } from './session';
-import { getStoredUser, getStoredSession, clearAllStorage } from '../lib/storage';
+import { applyAuthoritativeUsage, handleLocalEstimate, markSessionNotified } from './session';
+import {
+  getStoredUser,
+  getStoredSession,
+  setStoredSession,
+  clearAllStorage,
+  getResetWindowMs,
+  setMidSessionDetected,
+} from '../lib/storage';
 import { syncSessionToFirestore } from './sync';
+import { fireResetNotification } from './notifications';
 
-// ── Secondary detection: network signal ───────────────────────────────────────
-//
-// This runs in the background at all times, catching prompts even if the
-// content script DOM signal fails (e.g., after a Claude UI redesign).
-//
-// webRequest in MV3 is read-only (no blocking), which is all we need.
-// The listener MUST be registered at the top level (synchronously) — not
-// inside an async function or another event handler — or MV3 will not
-// attach it reliably.
+// ── Secondary detection: network signal (fallback only) ──────────────────────
 
 chrome.webRequest.onBeforeRequest.addListener(
-  // The webRequest callback type is synchronous — async logic goes in a void IIFE
   (details) => {
     if (details.method !== 'POST') return;
     void (async () => {
       const user = await getStoredUser();
-      if (!user) return; // tracking requires sign-in
+      if (!user) return;
 
-      const wasNew = await handleSessionStart(Date.now());
+      const wasNew = await handleLocalEstimate(Date.now());
       if (wasNew) {
-        console.log('[Claude Reset] Session started via network signal');
+        console.log('[Claude Reset] Session started via network signal (fallback)');
         const session = await getStoredSession();
-        if (session) {
-          // Fire-and-forget sync (M5 stub — no-op until M5 is implemented)
-          syncSessionToFirestore(session, user).catch(console.error);
-        }
+        if (session) syncSessionToFirestore(session, user).catch(console.error);
       }
     })();
   },
   { urls: ['https://claude.ai/api/*'] },
 );
 
-// ── Primary detection: message from content script ───────────────────────────
+// ── Message handler ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(
   (rawMessage: unknown, _sender, sendResponse) => {
     const message = rawMessage as ContentMessage;
 
-    if (message.type === 'SESSION_PROMPT_DETECTED') {
+    // ── Authoritative usage data from GET /usage ───────────────────────────────
+    if (message.type === 'USAGE_UPDATE') {
       void (async () => {
         const user = await getStoredUser();
-        if (!user) {
-          sendResponse({ ok: false });
-          return;
-        }
+        if (!user) { sendResponse({ ok: false }); return; }
 
-        const wasNew = await handleSessionStart(message.timestamp);
-        if (wasNew) {
-          console.log('[Claude Reset] Session started via DOM signal');
-          const session = await getStoredSession();
-          if (session) {
-            syncSessionToFirestore(session, user).catch(console.error);
-          }
-        }
+        await applyAuthoritativeUsage(message.resetsAtMs);
+
+        const session = await getStoredSession();
+        if (session) syncSessionToFirestore(session, user).catch(console.error);
+
         sendResponse({ ok: true });
       })();
-
-      // Return true to keep the message channel open for the async response
       return true;
     }
 
+    // ── Fallback: DOM signal (only reached when GET /usage failed) ────────────
+    if (message.type === 'SESSION_PROMPT_DETECTED') {
+      void (async () => {
+        const user = await getStoredUser();
+        if (!user) { sendResponse({ ok: false }); return; }
+
+        const wasNew = await handleLocalEstimate(message.timestamp);
+        if (wasNew) {
+          console.log('[Claude Reset] Session started via DOM signal (fallback)');
+          const session = await getStoredSession();
+          if (session) syncSessionToFirestore(session, user).catch(console.error);
+        }
+        sendResponse({ ok: true });
+      })();
+      return true;
+    }
+
+    // ── Fallback: mid-session DOM recovery (only reached when GET /usage failed) ─
+    if (message.type === 'SESSION_RECOVERY') {
+      void (async () => {
+        const user = await getStoredUser();
+        if (!user) { sendResponse({ ok: false }); return; }
+
+        const existing = await getStoredSession();
+        if (existing && !existing.notified && Date.now() < existing.resetTime) {
+          console.log('[Claude Reset] Recovery skipped — session already tracked');
+          sendResponse({ ok: true });
+          return;
+        }
+
+        if (message.estimatedStart !== null) {
+          const resetWindowMs = await getResetWindowMs();
+          const resetTime = message.estimatedStart + resetWindowMs;
+
+          if (Date.now() < resetTime) {
+            await setStoredSession({
+              sessionStart: message.estimatedStart,
+              resetTime,
+              notified: false,
+              source: 'local-estimate',
+            });
+            chrome.alarms.clear(ALARM_NAME, () => {
+              chrome.alarms.create(ALARM_NAME, { when: resetTime });
+            });
+            console.log(
+              `[Claude Reset] Session recovered from DOM scan (fallback).\n` +
+              `  Start : ${new Date(message.estimatedStart!).toLocaleTimeString()}\n` +
+              `  Reset : ${new Date(resetTime).toLocaleTimeString()}`,
+            );
+            const freshSession = await getStoredSession();
+            if (freshSession) syncSessionToFirestore(freshSession, user).catch(console.error);
+          } else {
+            console.log('[Claude Reset] Recovery: timestamp found but session already expired');
+          }
+        } else if (message.hasExistingMessages) {
+          await setMidSessionDetected(true);
+          console.log('[Claude Reset] Mid-session detected — start time unavailable (fallback path)');
+        }
+
+        sendResponse({ ok: true });
+      })();
+      return true;
+    }
+
+    // ── Sign-out ──────────────────────────────────────────────────────────────
     if (message.type === 'SIGN_OUT') {
       void (async () => {
         chrome.alarms.clear(ALARM_NAME);
@@ -93,31 +143,21 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
-// ── Desktop notification at reset time ───────────────────────────────────────
+// ── Alarm handler: fires the layered notification at reset time ───────────────
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== ALARM_NAME) return;
 
   const session = await getStoredSession();
-
-  // Guard: don't send twice if the SW restarts and re-processes the same alarm
   if (!session || session.notified) return;
 
   await markSessionNotified();
+  await fireResetNotification();
 
-  chrome.notifications.create(NOTIFICATION_ID, {
-    type: 'basic',
-    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-    title: '✅ Claude is ready',
-    message: 'Your 5-hour session has reset. Click to open Claude.',
-    priority: 2,
-    requireInteraction: false,
-  });
-
-  console.log('[Claude Reset] Desktop notification sent');
+  console.log('[Claude Reset] Reset notification fired');
 });
 
-// ── Notification click → open Claude ─────────────────────────────────────────
+// ── OS notification click → open Claude ──────────────────────────────────────
 
 chrome.notifications.onClicked.addListener((notificationId) => {
   if (notificationId !== NOTIFICATION_ID) return;
@@ -129,7 +169,6 @@ chrome.notifications.onClicked.addListener((notificationId) => {
 
 self.addEventListener('install', () => {
   console.log('[Claude Reset] Service worker installed');
-  // Force the new SW to activate immediately without waiting for old tabs to close
   void (self as unknown as { skipWaiting: () => Promise<void> }).skipWaiting();
 });
 

@@ -102,6 +102,13 @@ body {
   letter-spacing: 0.06em;
 }
 
+.time-approx {
+  color: #3a3a3a;
+  text-transform: none;
+  letter-spacing: normal;
+  font-style: italic;
+}
+
 .time-value { font-size: 14px; font-weight: 600; color: #d0d0d0; }
 .time-value.accent { color: #f97316; }
 

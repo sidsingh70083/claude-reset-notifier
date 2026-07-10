@@ -42,6 +42,27 @@ export async function setResetWindowMs(ms: number): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEYS.resetWindowMs]: ms });
 }
 
+// ── Mid-session flag ──────────────────────────────────────────────────────────
+//
+// Set to true when the recovery scan detects existing Claude messages but
+// cannot extract a machine-readable timestamp. This tells the popup to show
+// an informative "session in progress, start time unknown" state rather than
+// pretending nothing is happening.
+// Cleared automatically when a new session starts with a known timestamp.
+
+export async function getMidSessionDetected(): Promise<boolean> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.midSessionDetected);
+  return (result[STORAGE_KEYS.midSessionDetected] as boolean) ?? false;
+}
+
+export async function setMidSessionDetected(value: boolean): Promise<void> {
+  if (!value) {
+    await chrome.storage.local.remove(STORAGE_KEYS.midSessionDetected);
+  } else {
+    await chrome.storage.local.set({ [STORAGE_KEYS.midSessionDetected]: true });
+  }
+}
+
 // ── Nuke everything on sign-out ───────────────────────────────────────────────
 
 export async function clearAllStorage(): Promise<void> {
