@@ -1,6 +1,7 @@
 import { ALARM_NAME } from '@claude-reset/shared';
 import type { Session } from '@claude-reset/shared';
 import { getStoredSession, setStoredSession, getResetWindowMs, setMidSessionDetected } from '../lib/storage';
+import { stopReminders } from './notifications/reminder';
 
 /**
  * Applies AUTHORITATIVE usage data from GET /usage. This is always preferred
@@ -54,6 +55,11 @@ export async function applyAuthoritativeUsage(resetsAtMs: number | null): Promis
   await setStoredSession(session);
   await setMidSessionDetected(false); // we now have real data — no need for the ambiguous state
 
+  // A brand-new session starting is one of the four reminder stop conditions —
+  // whatever reminder cycle was running for the PREVIOUS session must not
+  // bleed into this one.
+  stopReminders();
+
   chrome.alarms.clear(ALARM_NAME, () => {
     chrome.alarms.create(ALARM_NAME, { when: session.resetTime });
   });
@@ -101,6 +107,8 @@ export async function handleLocalEstimate(timestamp: number): Promise<boolean> {
 
   await setStoredSession(session);
   await setMidSessionDetected(false);
+
+  stopReminders(); // same stop condition as above — new session begins
 
   chrome.alarms.clear(ALARM_NAME, () => {
     chrome.alarms.create(ALARM_NAME, { when: session.resetTime });

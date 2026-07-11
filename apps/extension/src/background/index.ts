@@ -2,14 +2,19 @@
  * Background Service Worker
  *
  * Message priority (highest trust first):
- *   1. USAGE_UPDATE          — authoritative, from GET /usage (detector.ts)
+ *   1. USAGE_UPDATE            — authoritative, from GET /usage (detector.ts)
  *   2. SESSION_PROMPT_DETECTED — local estimate fallback (DOM/network signal)
- *   3. SESSION_RECOVERY      — local estimate fallback (mid-session DOM scan)
+ *   3. SESSION_RECOVERY        — local estimate fallback (mid-session DOM scan)
  *
  * See session.ts for the full trust/precedence logic between these.
+ *
+ * Notification architecture:
+ *   All notifications go through notifications/manager.ts's notifyReset().
+ *   This file never implements notification logic directly — it only
+ *   decides WHEN to fire an event and WHAT event to pass.
  */
 
-import { ALARM_NAME, NOTIFICATION_ID } from '@claude-reset/shared';
+import { ALARM_NAME, REMINDER_ALARM_NAME } from '@claude-reset/shared';
 import type { ContentMessage } from '@claude-reset/shared';
 import { applyAuthoritativeUsage, handleLocalEstimate, markSessionNotified } from './session';
 import {
@@ -21,7 +26,12 @@ import {
   setMidSessionDetected,
 } from '../lib/storage';
 import { syncSessionToFirestore } from './sync';
-import { fireResetNotification } from './notifications';
+import { notifyReset } from './notifications/manager';
+import { startReminders, stopReminders } from './notifications/reminder';
+import { isOurNotificationId } from './notifications/channels/desktop';
+import { resolveSoundUrl } from './notifications/sound-sources';
+import { playSoundViaOffscreen } from './notifications/offscreen-manager';
+import { getNotificationPreferences } from './notifications/preferences';
 
 // ── Secondary detection: network signal (fallback only) ──────────────────────
 
@@ -42,6 +52,25 @@ chrome.webRequest.onBeforeRequest.addListener(
   },
   { urls: ['https://claude.ai/api/*'] },
 );
+
+// ── "User opens Claude" — a reminder stop condition ───────────────────────────
+
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url?.startsWith('https://claude.ai')) {
+    stopReminders();
+  }
+});
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    if (tab.url?.startsWith('https://claude.ai')) {
+      stopReminders();
+    }
+  } catch {
+    // Tab may have closed between the event firing and this lookup — harmless
+  }
+});
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
@@ -106,6 +135,7 @@ chrome.runtime.onMessage.addListener(
               notified: false,
               source: 'local-estimate',
             });
+            stopReminders();
             chrome.alarms.clear(ALARM_NAME, () => {
               chrome.alarms.create(ALARM_NAME, { when: resetTime });
             });
@@ -129,10 +159,39 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    // ── Mark as Seen — stops any active reminder cycle, clears the badge ───────
+    if (message.type === 'MARK_AS_SEEN') {
+      void (async () => {
+        stopReminders();
+        await chrome.action.setBadgeText({ text: '' });
+        sendResponse({ ok: true });
+      })();
+      return true;
+    }
+
+    // ── Test Sound — plays immediately, bypasses NotificationManager entirely ─
+    //    since this is a direct user-initiated check, not a reset event, and
+    //    should ignore the sound-enabled toggle (testing should always work).
+    if (message.type === 'TEST_SOUND') {
+      void (async () => {
+        const prefs = await getNotificationPreferences();
+        const url = resolveSoundUrl(message.soundId);
+        try {
+          await playSoundViaOffscreen(url, prefs.sound.volumeMode, prefs.sound.volumePercent);
+          sendResponse({ ok: true });
+        } catch (err) {
+          console.warn('[Claude Reset] Test sound failed:', err);
+          sendResponse({ ok: false });
+        }
+      })();
+      return true;
+    }
+
     // ── Sign-out ──────────────────────────────────────────────────────────────
     if (message.type === 'SIGN_OUT') {
       void (async () => {
         chrome.alarms.clear(ALARM_NAME);
+        stopReminders();
         await clearAllStorage();
         sendResponse({ ok: true });
       })();
@@ -143,26 +202,41 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
-// ── Alarm handler: fires the layered notification at reset time ───────────────
+// ── Alarm handler: initial reset notification + reminder cycle ────────────────
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== ALARM_NAME) return;
+  if (alarm.name === ALARM_NAME) {
+    const session = await getStoredSession();
+    if (!session || session.notified) return;
 
-  const session = await getStoredSession();
-  if (!session || session.notified) return;
+    await markSessionNotified();
+    await notifyReset({ kind: 'initial', resetTime: session.resetTime, utilization: null });
+    await startReminders();
 
-  await markSessionNotified();
-  await fireResetNotification();
+    console.log('[Claude Reset] Initial reset notification fired');
+    return;
+  }
 
-  console.log('[Claude Reset] Reset notification fired');
+  if (alarm.name === REMINDER_ALARM_NAME) {
+    const session = await getStoredSession();
+    if (!session) {
+      // No session on record at all — nothing to remind about, stop the cycle.
+      stopReminders();
+      return;
+    }
+
+    await notifyReset({ kind: 'reminder', resetTime: session.resetTime, utilization: null });
+    console.log('[Claude Reset] Reminder notification fired');
+  }
 });
 
-// ── OS notification click → open Claude ──────────────────────────────────────
+// ── OS notification click → open Claude, stop reminders ───────────────────────
 
 chrome.notifications.onClicked.addListener((notificationId) => {
-  if (notificationId !== NOTIFICATION_ID) return;
+  if (!isOurNotificationId(notificationId)) return;
   chrome.tabs.create({ url: 'https://claude.ai' });
-  chrome.notifications.clear(NOTIFICATION_ID);
+  chrome.notifications.clear(notificationId);
+  stopReminders(); // clicking through counts as "manually dismisses"
 });
 
 // ── Service worker lifecycle ──────────────────────────────────────────────────

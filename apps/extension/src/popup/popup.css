@@ -83,6 +83,27 @@ body {
 
 .btn-ghost:hover { color: #ccc; background: #1a1a1a; }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 6px 0;
+  margin-top: 4px;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.btn-text:hover:not(:disabled) { color: #f97316; }
+.btn-text:disabled { color: #3a3a3a; cursor: default; text-decoration: none; }
+
 /* ── Countdown ─────────────────────────────────────────────────────── */
 
 .countdown-root { display: flex; flex-direction: column; gap: 0; }

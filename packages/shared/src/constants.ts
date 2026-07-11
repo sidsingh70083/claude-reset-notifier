@@ -16,13 +16,15 @@ export const STORAGE_KEYS = {
   resetWindowMs: 'resetWindowMs',
   /** True when recovery scan found messages but could not extract a start timestamp. */
   midSessionDetected: 'midSessionDetected',
+  /** NotificationPreferences — local only, per architecture decision. */
+  notificationPreferences: 'notificationPreferences',
 } as const;
 
-/** Named alarm — survives service worker termination */
+/** Named alarm for the initial reset notification — survives service worker termination */
 export const ALARM_NAME = 'claude-reset-alarm';
 
-/** Notification ID — stable so we can replace/clear it */
-export const NOTIFICATION_ID = 'claude-reset-notification';
+/** Named alarm for recurring reminders — separate from ALARM_NAME so the two lifecycles never interfere */
+export const REMINDER_ALARM_NAME = 'claude-reset-reminder-alarm';
 
 /**
  * Debounce window for prompt detection.
@@ -30,3 +32,42 @@ export const NOTIFICATION_ID = 'claude-reset-notification';
  * same prompt — this prevents double-counting them as two separate sessions.
  */
 export const SESSION_START_DEBOUNCE_MS = 5_000;
+
+/**
+ * Built-in sound IDs — the single source of truth for what sounds exist.
+ * SoundNotifier and the Options page both read from this list; adding a new
+ * built-in sound means adding one entry here plus one bundled audio file,
+ * nothing else changes.
+ */
+export const BUILTIN_SOUND_IDS = ['default', 'chime', 'bell', 'digital'] as const;
+export type BuiltinSoundId = (typeof BUILTIN_SOUND_IDS)[number];
+
+export const BUILTIN_SOUND_LABELS: Record<BuiltinSoundId, string> = {
+  default: 'Default',
+  chime: 'Chime',
+  bell: 'Bell',
+  digital: 'Digital',
+};
+
+export const REMINDER_INTERVALS_MINUTES = [5, 10, 15, 30, 60] as const;
+export type ReminderIntervalMinutes = (typeof REMINDER_INTERVALS_MINUTES)[number];
+export type ReminderMode = 'disabled' | ReminderIntervalMinutes;
+
+/** Default preferences applied on first install, before the user changes anything. */
+export const DEFAULT_NOTIFICATION_PREFERENCES = {
+  channels: {
+    badge: true,
+    toast: true,
+    desktop: true,
+    sound: true,
+  },
+  sound: {
+    enabled: true,
+    soundId: 'default' as BuiltinSoundId | string,
+    volumeMode: 'system' as 'system' | 'extension',
+    volumePercent: 75,
+  },
+  reminder: {
+    mode: 'disabled' as ReminderMode,
+  },
+};

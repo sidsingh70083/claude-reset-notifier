@@ -10,6 +10,7 @@ export default function Popup() {
   const [user, setUser] = useState<StoredUser | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<PopupState>('loading');
+  const [markSeenStatus, setMarkSeenStatus] = useState<'idle' | 'done'>('idle');
 
   const loadState = useCallback(async () => {
     const [storedUser, storedSession, midSession] = await Promise.all([
@@ -50,6 +51,18 @@ export default function Popup() {
     setState('signed-out');
   }
 
+  function handleOpenSettings() {
+    chrome.runtime.openOptionsPage();
+  }
+
+  async function handleMarkAsSeen() {
+    await chrome.runtime.sendMessage({ type: 'MARK_AS_SEEN' }).catch(() => {
+      /* SW may be asleep — harmless, the reminder alarm will still be cleared
+         next time any other stop condition fires */
+    });
+    setMarkSeenStatus('done');
+  }
+
   if (state === 'loading') {
     return <div className="loading">Loading…</div>;
   }
@@ -62,9 +75,14 @@ export default function Popup() {
     <div className="popup-root">
       <header className="popup-header">
         <span className="header-logo">⏱ Claude Reset</span>
-        <button className="btn-ghost" onClick={() => void handleSignOut()}>
-          Sign out
-        </button>
+        <div className="header-actions">
+          <button className="btn-ghost" onClick={handleOpenSettings} title="Settings">
+            ⚙
+          </button>
+          <button className="btn-ghost" onClick={() => void handleSignOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       <main className="popup-main">
@@ -84,6 +102,13 @@ export default function Popup() {
             >
               Open Claude
             </a>
+            <button
+              className="btn-text"
+              onClick={() => void handleMarkAsSeen()}
+              disabled={markSeenStatus === 'done'}
+            >
+              {markSeenStatus === 'done' ? 'Reminders stopped ✓' : 'Mark as Seen'}
+            </button>
           </div>
         )}
 
