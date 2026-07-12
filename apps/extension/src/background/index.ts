@@ -25,7 +25,7 @@ import {
   getResetWindowMs,
   setMidSessionDetected,
 } from '../lib/storage';
-import { syncSessionToFirestore } from './sync';
+import { syncSessionToFirestore, fetchRemoteResetWindow } from './sync';
 import { notifyReset } from './notifications/manager';
 import { startReminders, stopReminders } from './notifications/reminder';
 import { isOurNotificationId } from './notifications/channels/desktop';
@@ -84,7 +84,7 @@ chrome.runtime.onMessage.addListener(
         const user = await getStoredUser();
         if (!user) { sendResponse({ ok: false }); return; }
 
-        await applyAuthoritativeUsage(message.resetsAtMs);
+        await applyAuthoritativeUsage(message.resetsAtMs, message.hasUsageEvidence);
 
         const session = await getStoredSession();
         if (session) syncSessionToFirestore(session, user).catch(console.error);
@@ -248,4 +248,14 @@ self.addEventListener('install', () => {
 
 self.addEventListener('activate', () => {
   console.log('[Claude Reset] Service worker activated');
+
+  // Refresh the remote resetWindowMs config once per activation. Only matters
+  // for the local-estimate fallback path (see session.ts) — when GET /usage
+  // succeeds, resetTime is authoritative from Anthropic and never touches
+  // this cached value at all.
+  void (async () => {
+    const user = await getStoredUser();
+    if (!user) return; // no point fetching config before anyone's signed in
+    await fetchRemoteResetWindow();
+  })();
 });

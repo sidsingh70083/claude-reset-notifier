@@ -112,6 +112,17 @@ export type ContentMessage =
       type: 'USAGE_UPDATE';
       resetsAtMs: number | null;
       utilization: number | null;
+      /**
+       * True only when the content script has real local evidence that usage
+       * has actually started: a detected prompt being sent, or pre-existing
+       * messages already visible on page load (genuine mid-session recovery).
+       * False for a bare page load with no visible prior activity, or the
+       * rollover recheck timer — in both of those cases a future resetsAtMs
+       * alone must NOT be treated as proof an active session exists.
+       * See background/session.ts's applyAuthoritativeUsage for how this
+       * gates session creation vs. merely correcting an already-active one.
+       */
+      hasUsageEvidence: boolean;
     }
   | { type: 'SIGN_OUT' }
   | { type: 'MARK_AS_SEEN' }

@@ -9,6 +9,17 @@ export const FIRESTORE_PATHS = {
   globalConfig: 'config/global',
 } as const;
 
+/**
+ * Firestore collection GROUP names — distinct from FIRESTORE_PATHS above,
+ * which builds full per-user document paths. A collection group query
+ * matches a subcollection name across every parent document (e.g. every
+ * user's session subcollection at once), so it needs just the bare name,
+ * not a uid-scoped path. Used by the dispatcher's cross-user query.
+ */
+export const FIRESTORE_COLLECTION_GROUPS = {
+  session: 'session',
+} as const;
+
 /** chrome.storage.local keys */
 export const STORAGE_KEYS = {
   session: 'session',

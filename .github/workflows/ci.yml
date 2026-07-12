@@ -40,6 +40,9 @@ jobs:
       - name: Typecheck — companion PWA
         run: pnpm --filter @claude-reset/companion-pwa typecheck
 
+      - name: Typecheck — dispatcher
+        run: pnpm --filter @claude-reset/dispatcher typecheck
+
       # ── Builds ───────────────────────────────────────────────────────────────
       # Secrets must be added to the repo before these steps will succeed:
       #   Repo → Settings → Secrets and variables → Actions → New repository secret

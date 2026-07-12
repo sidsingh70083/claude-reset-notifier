@@ -5,7 +5,10 @@
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@claude-reset/shared": ["../packages/shared/src/index.ts"]
+    }
   },
   "include": ["*.ts"]
 }

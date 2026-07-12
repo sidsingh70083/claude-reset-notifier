@@ -40,8 +40,13 @@ let rolloverCheckTimer: ReturnType<typeof setTimeout> | null = null;
  * Fetches authoritative usage data and reports it to the background SW.
  * Returns true on success (background now has real data), false on any
  * failure (caller should rely on the DOM/network fallback instead).
+ *
+ * hasUsageEvidence must be supplied by the caller — this function only knows
+ * about the network response, not WHY it was called. See each call site
+ * below for what counts as evidence, and shared/types.ts's USAGE_UPDATE
+ * variant for how the background SW uses this fact.
  */
-async function refreshUsageFromEndpoint(): Promise<boolean> {
+async function refreshUsageFromEndpoint(hasUsageEvidence: boolean): Promise<boolean> {
   const orgId = getOrgIdFromCookie();
   if (!orgId) return false; // not signed in yet, or cookie not set — fallback handles this
 
@@ -54,12 +59,13 @@ async function refreshUsageFromEndpoint(): Promise<boolean> {
       type: 'USAGE_UPDATE',
       resetsAtMs,
       utilization,
+      hasUsageEvidence,
     });
 
-    // Schedule a rollover recheck shortly after this window is expected to end,
-    // so the next session's real data is picked up automatically without
-    // waiting for a new message to be sent (the SSE approach used by other
-    // extensions can't do this — it only updates during active message sends).
+    // Schedule a rollover recheck shortly after this window is expected to end.
+    // This recheck's ONLY job is confirming the old window has truly ended and
+    // clearing stale state — it must never create a new session on its own
+    // (see the rollover callback below, which reports hasUsageEvidence: false).
     if (resetsAtMs !== null) {
       lastKnownResetMs = resetsAtMs;
       scheduleRolloverCheck(resetsAtMs);
@@ -80,7 +86,9 @@ function scheduleRolloverCheck(resetMs: number): void {
     // Only re-check if this is still the most recent known reset time
     // (avoids a stale timer firing after a newer one has already superseded it)
     if (lastKnownResetMs === resetMs) {
-      void refreshUsageFromEndpoint();
+      // No evidence here — this recheck exists purely to clear stale state
+      // once a window truly ends, never to create a new one from nothing.
+      void refreshUsageFromEndpoint(false);
     }
   }, delay);
 }
@@ -171,9 +179,9 @@ function onPromptDetected(source: 'dom'): void {
   if (now - lastDetectedAt < SESSION_START_DEBOUNCE_MS) return;
   lastDetectedAt = now;
 
-  // Always try the authoritative endpoint first — the DOM signal is now just
-  // a trigger to go check real data, not the source of the timestamp itself.
-  void refreshUsageFromEndpoint().then((succeeded) => {
+  // A detected DOM mutation matching a sent message IS real evidence usage
+  // has started — always true here, unlike the page-load case below.
+  void refreshUsageFromEndpoint(true).then((succeeded) => {
     if (!succeeded) {
       chrome.runtime
         .sendMessage({ type: 'SESSION_PROMPT_DETECTED', timestamp: now, source })
@@ -200,16 +208,26 @@ function startObserving(): void {
 // ── Initialization ────────────────────────────────────────────────────────────
 
 async function initialize(): Promise<void> {
-  // 1. Try the authoritative endpoint immediately (handles mid-session recovery)
-  const succeeded = await refreshUsageFromEndpoint();
+  // ROOT CAUSE FIX: a bare page load must NOT be treated as evidence that
+  // usage has started. The only legitimate reason a page load may create a
+  // session is genuine mid-session recovery — real messages already visible
+  // in the DOM, meaning a conversation is already actively underway. An
+  // empty/fresh page has no such evidence, even though GET /usage may still
+  // return a future resetsAtMs (see background/session.ts for why that
+  // alone is not proof of an active session).
+  const hasExistingMessages = queryExistingUserMessages().length > 0;
 
-  // 2. If it failed, fall back to scanning the DOM for existing messages
+  const succeeded = await refreshUsageFromEndpoint(hasExistingMessages);
+
+  // If the authoritative endpoint failed, fall back to scanning the DOM —
+  // attemptDomRecovery() already correctly requires real existing messages
+  // before recovering anything, so it never had this bug.
   if (!succeeded) {
     await attemptDomRecovery();
   }
 
-  // 3. Ongoing detection always runs, regardless of which path succeeded above —
-  //    it's what triggers refreshUsageFromEndpoint() on subsequent prompts.
+  // Ongoing detection always runs, regardless of which path succeeded above —
+  // it's what triggers refreshUsageFromEndpoint() on subsequent prompts.
   startObserving();
 }
 
